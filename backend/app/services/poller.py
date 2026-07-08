@@ -1,15 +1,13 @@
 """
-MVP device poller.
+Device poller.
 
-Today: uses ICMP ping to determine online/offline status — this works against
-any real device right away with zero device-side config.
+Every cycle, for every device:
+1. ICMP ping -> online/offline status (works against any device, zero config)
+2. If the device has an SNMP community configured, also collect real
+   CPU/memory/interface metrics via app/services/snmp_poller.py
 
-Next step (see README "Extending the poller"): add SNMP GET calls via pysnmp
-for CPU/memory/interface counters on devices that have `snmp_community` set,
-so status is not just reachability but real performance metrics.
-
-Runs on a simple interval loop via APScheduler so there's no extra
-infrastructure (Celery/Redis) required to get real data flowing on day one.
+Runs on a simple asyncio interval loop so there's no extra infrastructure
+(Celery/Redis) required to get real data flowing on day one.
 """
 
 import asyncio
@@ -22,6 +20,7 @@ from app.api.routes.ws import manager
 from app.db.session import AsyncSessionLocal
 from app.models.device import Device
 from app.models.metric import Metric
+from app.services.snmp_poller import poll_snmp_metrics
 
 logger = logging.getLogger("poller")
 
@@ -38,9 +37,7 @@ async def poll_device(device: Device, db) -> None:
     if device.status != new_status:
         device.status = new_status
 
-    # TODO: replace this placeholder with real pysnmp GETs (CPU/memory OIDs vary by vendor)
-    # when device.snmp_community is set. For now we only record reachability-based status
-    # so the dashboard has *something* real to show without requiring SNMP-enabled gear.
+    # Reachability metric — always recorded, works for any device
     metric = Metric(device_id=device.id, metric_type="reachability", value=1.0 if is_online else 0.0)
     db.add(metric)
 
@@ -52,6 +49,26 @@ async def poll_device(device: Device, db) -> None:
             "value": metric.value,
         }
     )
+
+    # Real SNMP metrics (CPU, memory, interface counts) — only for devices
+    # that have a community string configured. Silently skipped otherwise.
+    if device.snmp_community:
+        try:
+            snmp_metrics = await poll_snmp_metrics(device.ip_address, device.snmp_community)
+        except Exception:
+            logger.exception("SNMP poll failed for %s (%s)", device.name, device.ip_address)
+            snmp_metrics = {}
+
+        for metric_type, value in snmp_metrics.items():
+            db.add(Metric(device_id=device.id, metric_type=metric_type, value=value))
+            await manager.broadcast(
+                {
+                    "device_id": str(device.id),
+                    "status": new_status,
+                    "metric_type": metric_type,
+                    "value": value,
+                }
+            )
 
 
 async def poll_all_devices() -> None:

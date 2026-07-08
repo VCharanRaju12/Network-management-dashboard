@@ -20,6 +20,14 @@ services:
     ports:
       - "6379:6379"
 
+  # A real, standard Linux SNMP agent (net-snmp) for testing — read-only,
+  # community string "public". This is what you'll add as a Device to see
+  # genuine CPU/memory/interface metrics without needing enterprise gear.
+  snmp-agent:
+    build: ./snmp-agent
+    ports:
+      - "1161:161/udp"
+
   backend:
     build: ./backend
     env_file:
