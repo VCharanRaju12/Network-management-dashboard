@@ -20,6 +20,7 @@ from app.api.routes.ws import manager
 from app.db.session import AsyncSessionLocal
 from app.models.device import Device
 from app.models.metric import Metric
+from app.services.audit_logger import log_action
 from app.services.snmp_poller import poll_snmp_metrics
 
 logger = logging.getLogger("poller")
@@ -34,7 +35,9 @@ async def poll_device(device: Device, db) -> None:
         is_online = False
 
     new_status = "online" if is_online else "offline"
-    if device.status != new_status:
+    previous_status = device.status
+    status_changed = previous_status != new_status
+    if status_changed:
         device.status = new_status
 
     # Reachability metric — always recorded, works for any device
@@ -49,6 +52,30 @@ async def poll_device(device: Device, db) -> None:
             "value": metric.value,
         }
     )
+
+    # Persist real transitions (not every poll tick, just actual changes) to
+    # the audit log — this is what backs the frontend's live activity feed
+    # and alerting with real, queryable history rather than only in-memory
+    # WebSocket messages that vanish on page refresh.
+    if status_changed and previous_status != "unknown":
+        await log_action(
+            db,
+            actor_id=None,  # system-initiated, not a user action
+            action="device.status_changed",
+            target_type="device",
+            target_id=device.id,
+            details={"from": previous_status, "to": new_status, "device_name": device.name},
+        )
+        await manager.broadcast(
+            {
+                "device_id": str(device.id),
+                "status": new_status,
+                "metric_type": "status_change",
+                "value": 1.0 if new_status == "online" else 0.0,
+                "device_name": device.name,
+                "previous_status": previous_status,
+            }
+        )
 
     # Real SNMP metrics (CPU, memory, interface counts) — only for devices
     # that have a community string configured. Silently skipped otherwise.

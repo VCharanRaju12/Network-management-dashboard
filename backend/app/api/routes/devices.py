@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_admin
 from app.db.session import get_db
+from app.models.audit import AuditLog
 from app.models.device import Device
 from app.models.metric import Metric
 from app.models.user import User
@@ -13,6 +14,38 @@ from app.schemas.device import DeviceCreate, DeviceOut, DeviceUpdate, MetricOut
 from app.services.audit_logger import log_action
 
 router = APIRouter(prefix="/devices", tags=["devices"])
+
+
+@router.get("/events/recent")
+async def recent_device_events(
+    limit: int = 30,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    Read-only feed of device status transitions (online/offline), for the
+    dashboard's live activity feed. Deliberately separate from the full
+    /api/audit-log (which stays admin-only, since it also covers sensitive
+    user-management actions) — this one is safe for viewers to see too.
+    """
+    result = await db.execute(
+        select(AuditLog)
+        .where(AuditLog.action == "device.status_changed")
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+    )
+    entries = result.scalars().all()
+    return [
+        {
+            "id": e.id,
+            "device_id": str(e.target_id) if e.target_id else None,
+            "device_name": (e.details or {}).get("device_name"),
+            "from_status": (e.details or {}).get("from"),
+            "to_status": (e.details or {}).get("to"),
+            "created_at": e.created_at,
+        }
+        for e in entries
+    ]
 
 
 @router.get("", response_model=list[DeviceOut])
