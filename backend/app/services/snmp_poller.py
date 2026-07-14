@@ -42,7 +42,11 @@ OID_HR_PROCESSOR_LOAD = "1.3.6.1.2.1.25.3.3.1.2"   # table: one row per CPU core
 OID_HR_STORAGE_DESCR = "1.3.6.1.2.1.25.2.3.1.3"     # table: human-readable storage unit names
 OID_HR_STORAGE_SIZE = "1.3.6.1.2.1.25.2.3.1.5"      # table: total size per storage unit
 OID_HR_STORAGE_USED = "1.3.6.1.2.1.25.2.3.1.6"      # table: used size per storage unit
+OID_IF_DESCR = "1.3.6.1.2.1.2.2.1.2"                # table: interface name, e.g. "eth0"
 OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"          # table: 1 = up, 2 = down, per interface
+OID_IF_SPEED = "1.3.6.1.2.1.2.2.1.5"                # table: reported speed in bits/sec
+OID_IF_IN_OCTETS = "1.3.6.1.2.1.2.2.1.10"           # table: cumulative bytes received, per interface
+OID_IF_OUT_OCTETS = "1.3.6.1.2.1.2.2.1.16"          # table: cumulative bytes sent, per interface
 
 
 async def _get_scalar(ip: str, community: str, oid: str, timeout: int = 2):
@@ -158,3 +162,59 @@ async def poll_snmp_metrics(ip: str, community: str) -> dict:
             metrics["interfaces_total"] = float(total)
 
     return metrics
+
+
+async def poll_snmp_interfaces(ip: str, community: str) -> list[dict]:
+    """
+    Returns per-interface detail:
+        [{if_index, if_name, is_up, speed_mbps, in_octets, out_octets}, ...]
+    in_octets/out_octets are raw cumulative SNMP counters (not yet a rate) —
+    poller.py converts these into an actual Mbps rate by comparing against
+    the previous poll's reading, stored on the Interface row.
+    """
+    descr_rows = await _walk_table(ip, community, OID_IF_DESCR)
+    status_rows = await _walk_table(ip, community, OID_IF_OPER_STATUS)
+    speed_rows = await _walk_table(ip, community, OID_IF_SPEED)
+    in_octets_rows = await _walk_table(ip, community, OID_IF_IN_OCTETS)
+    out_octets_rows = await _walk_table(ip, community, OID_IF_OUT_OCTETS)
+
+    def index_of(oid: str) -> str:
+        return oid.split(".")[-1]
+
+    names = {index_of(oid): str(value) for oid, value in descr_rows}
+    statuses = {index_of(oid): value for oid, value in status_rows}
+    speeds = {index_of(oid): value for oid, value in speed_rows}
+    in_octets = {index_of(oid): value for oid, value in in_octets_rows}
+    out_octets = {index_of(oid): value for oid, value in out_octets_rows}
+
+    interfaces = []
+    for idx, name in names.items():
+        try:
+            is_up = int(statuses.get(idx, 2)) == 1
+        except (ValueError, TypeError):
+            is_up = False
+        try:
+            speed_mbps = int(speeds[idx]) // 1_000_000 if idx in speeds else None
+        except (ValueError, TypeError):
+            speed_mbps = None
+        try:
+            in_octets_value = int(in_octets[idx]) if idx in in_octets else None
+        except (ValueError, TypeError):
+            in_octets_value = None
+        try:
+            out_octets_value = int(out_octets[idx]) if idx in out_octets else None
+        except (ValueError, TypeError):
+            out_octets_value = None
+
+        interfaces.append(
+            {
+                "if_index": int(idx) if idx.isdigit() else None,
+                "if_name": name,
+                "is_up": is_up,
+                "speed_mbps": speed_mbps,
+                "in_octets": in_octets_value,
+                "out_octets": out_octets_value,
+            }
+        )
+
+    return interfaces

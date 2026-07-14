@@ -45,3 +45,14 @@ class MetricOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class InterfaceOut(BaseModel):
+    id: uuid.UUID
+    if_name: str
+    if_index: int | None
+    is_up: bool
+    speed_mbps: int | None
+
+    class Config:
+        from_attributes = True

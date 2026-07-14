@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Router, Network, LayoutGrid, Share2, Plus, LogOut, RadioTower } from "lucide-react";
+import { Router, Network, LayoutGrid, Share2, Plus, LogOut, RadioTower, Users as UsersIcon } from "lucide-react";
 import { api, type Device } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useDashboardSocket } from "../hooks/useDashboardSocket";
@@ -99,6 +99,15 @@ export function Dashboard() {
             </div>
           </div>
           <div className="flex items-center gap-4 text-sm">
+            {isAdmin && (
+              <Link
+                to="/admin/users"
+                className="flex items-center gap-1.5 text-muted hover:text-ink transition-colors"
+              >
+                <UsersIcon size={14} />
+                Users
+              </Link>
+            )}
             <span className="text-muted">
               {username} <span className="text-border">·</span>{" "}
               <span className="capitalize text-ink">{role}</span>

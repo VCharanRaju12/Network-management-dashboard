@@ -85,7 +85,60 @@ backend/
 docker-compose.yml
 ```
 
+## Testing
+
+Backend (pytest, against a real Postgres test database — not mocks):
+```bash
+cd backend
+pip install -r requirements.txt
+export TEST_DATABASE_URL=postgresql+asyncpg://netdash:netdash@localhost:5432/netdash_test
+# create netdash_test once: psql -c "CREATE DATABASE netdash_test OWNER netdash;"
+alembic upgrade head  # against netdash_test, via DATABASE_URL env var
+pytest -v
+```
+22 tests covering auth, RBAC enforcement, device CRUD, and audit logging — all run against a genuine Postgres instance, not sqlite or mocks, since the models use Postgres-specific types.
+
+Frontend (vitest):
+```bash
+cd frontend
+npm install
+npm test
+```
+
+## CI/CD
+
+`.github/workflows/ci.yml` runs both suites (plus a full production build) on every push and PR to `main` — backend tests spin up a real Postgres service container in the workflow itself.
+
+## Alerting (optional)
+
+Device status changes (online ↔ offline) can trigger real email and/or webhook notifications — see `backend/app/services/notifier.py` and the alerting section in `backend/.env.example`. Both are off by default; configure `SMTP_*` / `ALERT_EMAIL_TO` for email, or `ALERT_WEBHOOK_URL` (e.g. a Slack incoming webhook) for webhook alerts. Either, both, or neither — the poller never breaks if this isn't configured.
+
+## Interface-level detail
+
+For devices with SNMP configured, the poller now also collects per-interface data (name, up/down, speed) into the `Interface` table, exposed via `GET /api/devices/{id}/interfaces` and shown on the device detail page.
+
+## Important: migrations
+
+No new database migration is needed for any of the features above (interfaces, alerting, tests, CI) — the schema was already sufficient. **Don't replace your existing `alembic/versions` folder** if you already have a working migration from initial setup; only add new backend/frontend source files as instructed.
+
+## Bandwidth monitoring
+
+For devices with SNMP configured, the poller now computes real bandwidth (Mbps in/out) by comparing consecutive `ifInOctets`/`ifOutOctets` counter readings over time — not just interface up/down status. Handles 32-bit counter wraparound safely (skips that interval rather than reporting a bogus negative rate). Shown as trend charts on the device detail page. Note: if a device has multiple interfaces, the chart currently combines all of them into one series — true per-interface bandwidth breakdown isn't built yet.
+
+## Security hardening (this pass)
+
+Four real gaps got closed in this round, each with tests proving it:
+
+- **WebSocket authentication** — `/api/ws/dashboard` now requires a valid JWT (passed as a query param, since browsers can't set custom headers on a WebSocket handshake) before accepting the connection. Previously anyone with the URL could watch live device data with no login at all.
+- **CORS locked down** — `allow_origins` is no longer `"*"`; it's a configurable list (`CORS_ALLOWED_ORIGINS` in `.env`) defaulting to just the local dev frontend origin.
+- **Credentials encrypted at rest** — `snmp_community` is now encrypted (via `cryptography`'s Fernet) before it's ever written to the database, and decrypted only in-memory when the poller actually needs it. Devices created before this change keep working via a graceful plaintext fallback in `decrypt_secret()` — see `app/core/security.py`.
+- **Alert cooldown** — a flapping device (rapidly toggling online/offline) no longer spams your email/webhook on every single transition; `ALERT_COOLDOWN_SECONDS` (default 300s) throttles repeat alerts per device. The audit log and activity feed still record every real transition — only the *notification* is throttled.
+
+**Still open, by design (not done in this pass):** login rate-limiting, and refresh-token revocation (would need a server-side token store). Both are reasonable next steps, deliberately deferred as lower-value-per-effort at this project's current scale — see the running "remaining tasks" discussion for the full list.
+
 ## Security notes before you deploy this anywhere real
+
+
 
 - Change `SECRET_KEY` in `backend/.env.example` (copy it to `.env` and don't commit that).
 - `snmp_community` and SSH credentials are stored as plain columns right now — encrypt

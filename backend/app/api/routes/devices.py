@@ -5,12 +5,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_admin
+from app.core.security import encrypt_secret
 from app.db.session import get_db
 from app.models.audit import AuditLog
 from app.models.device import Device
+from app.models.interface import Interface
 from app.models.metric import Metric
 from app.models.user import User
-from app.schemas.device import DeviceCreate, DeviceOut, DeviceUpdate, MetricOut
+from app.schemas.device import DeviceCreate, DeviceOut, DeviceUpdate, InterfaceOut, MetricOut
 from app.services.audit_logger import log_action
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -60,7 +62,11 @@ async def create_device(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    device = Device(**payload.model_dump(), created_by=current_user.id)
+    device_data = payload.model_dump()
+    if device_data.get("snmp_community"):
+        device_data["snmp_community"] = encrypt_secret(device_data["snmp_community"])
+
+    device = Device(**device_data, created_by=current_user.id)
     db.add(device)
     await db.commit()
     await db.refresh(device)
@@ -90,12 +96,23 @@ async def update_device(
         raise HTTPException(status_code=404, detail="Device not found")
 
     changes = payload.model_dump(exclude_unset=True)
+    if "snmp_community" in changes and changes["snmp_community"]:
+        changes["snmp_community"] = encrypt_secret(changes["snmp_community"])
+
     for field, value in changes.items():
         setattr(device, field, value)
 
     await db.commit()
     await db.refresh(device)
-    await log_action(db, current_user.id, "device.updated", "device", device.id, changes)
+
+    # Redact the credential from the audit trail itself — encrypting it in
+    # the devices table but then writing the plaintext into audit_log.details
+    # would defeat the point entirely.
+    audit_changes = {**changes}
+    if "snmp_community" in audit_changes:
+        audit_changes["snmp_community"] = "***"
+
+    await log_action(db, current_user.id, "device.updated", "device", device.id, audit_changes)
     return device
 
 
@@ -129,4 +146,16 @@ async def get_device_metrics(
     query = query.order_by(Metric.recorded_at.desc()).limit(limit)
 
     result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.get("/{device_id}/interfaces", response_model=list[InterfaceOut])
+async def get_device_interfaces(
+    device_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Interface).where(Interface.device_id == device_id).order_by(Interface.if_index)
+    )
     return result.scalars().all()

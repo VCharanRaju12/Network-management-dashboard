@@ -24,9 +24,12 @@ services:
   # community string "public". This is what you'll add as a Device to see
   # genuine CPU/memory/interface metrics without needing enterprise gear.
   snmp-agent:
-    build: ./snmp-agent
-    ports:
-      - "1161:161/udp"
+       image: polinux/snmpd
+       volumes:
+         - ./snmp-agent/snmpd.conf:/etc/snmpd/snmpd.conf
+       command: ["-c", "/etc/snmpd/snmpd.conf"]
+       ports:
+         - "1161:161/udp"
 
   backend:
     build: ./backend

@@ -24,8 +24,18 @@ export function useDashboardSocket() {
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      // No point opening a connection the backend will just reject —
+      // ProtectedRoute shouldn't render this without a token anyway, but
+      // this guards against any edge case (e.g. token cleared mid-session).
+      return;
+    }
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/api/ws/dashboard`);
+    const socket = new WebSocket(
+      `${protocol}//${window.location.host}/api/ws/dashboard?token=${encodeURIComponent(token)}`
+    );
     socketRef.current = socket;
 
     socket.onopen = () => setConnected(true);

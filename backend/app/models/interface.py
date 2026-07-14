@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,5 +17,13 @@ class Interface(Base):
     if_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_up: Mapped[bool] = mapped_column(Boolean, default=True)
     speed_mbps: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Raw SNMP octet counters from the previous poll, plus when that poll
+    # happened — needed to compute a bandwidth *rate* (Mbps) from two
+    # point-in-time counter readings. Not exposed via the API directly;
+    # only the derived Mbps values (stored as Metric rows) are.
+    last_in_octets: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_out_octets: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_octets_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     device = relationship("Device", back_populates="interfaces")

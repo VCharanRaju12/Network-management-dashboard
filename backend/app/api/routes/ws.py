@@ -1,4 +1,7 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from jose import JWTError
+
+from app.core.security import decode_token
 
 router = APIRouter()
 
@@ -30,7 +33,26 @@ manager = ConnectionManager()
 
 
 @router.websocket("/ws/dashboard")
-async def dashboard_ws(websocket: WebSocket):
+async def dashboard_ws(websocket: WebSocket, token: str | None = Query(default=None)):
+    # Browsers can't attach custom headers (like Authorization) to a
+    # WebSocket handshake, so the token travels as a query param instead —
+    # this is the standard workaround for authenticating browser WebSockets.
+    # Validated the same way as any other JWT: same secret, same expiry
+    # check. A missing or invalid token is rejected before the connection
+    # is even accepted, so unauthenticated clients never receive live data.
+    if not token:
+        await websocket.close(code=4401)
+        return
+
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != "access":
+            await websocket.close(code=4401)
+            return
+    except JWTError:
+        await websocket.close(code=4401)
+        return
+
     await manager.connect(websocket)
     try:
         while True:

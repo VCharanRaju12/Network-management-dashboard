@@ -12,16 +12,20 @@ Runs on a simple asyncio interval loop so there's no extra infrastructure
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from icmplib import async_ping
 from sqlalchemy import select
 
 from app.api.routes.ws import manager
 from app.db.session import AsyncSessionLocal
+from app.core.security import decrypt_secret
 from app.models.device import Device
+from app.models.interface import Interface
 from app.models.metric import Metric
 from app.services.audit_logger import log_action
-from app.services.snmp_poller import poll_snmp_metrics
+from app.services.notifier import notify_status_change
+from app.services.snmp_poller import poll_snmp_interfaces, poll_snmp_metrics
 
 logger = logging.getLogger("poller")
 
@@ -77,11 +81,19 @@ async def poll_device(device: Device, db) -> None:
             }
         )
 
+        # Real email/webhook alerting — no-ops quietly if nothing is
+        # configured (see app/services/notifier.py + .env.example).
+        try:
+            await notify_status_change(device.name, device.ip_address, previous_status, new_status)
+        except Exception:
+            logger.exception("Alert notification failed for %s", device.name)
+
     # Real SNMP metrics (CPU, memory, interface counts) — only for devices
     # that have a community string configured. Silently skipped otherwise.
     if device.snmp_community:
+        community = decrypt_secret(device.snmp_community)
         try:
-            snmp_metrics = await poll_snmp_metrics(device.ip_address, device.snmp_community)
+            snmp_metrics = await poll_snmp_metrics(device.ip_address, community)
         except Exception:
             logger.exception("SNMP poll failed for %s (%s)", device.name, device.ip_address)
             snmp_metrics = {}
@@ -96,6 +108,78 @@ async def poll_device(device: Device, db) -> None:
                     "value": value,
                 }
             )
+
+        # Per-interface detail (name, up/down, speed) — upserts into the
+        # Interface table so the frontend can show real per-port status.
+        try:
+            snmp_interfaces = await poll_snmp_interfaces(device.ip_address, community)
+        except Exception:
+            logger.exception("SNMP interface poll failed for %s (%s)", device.name, device.ip_address)
+            snmp_interfaces = []
+
+        if snmp_interfaces:
+            existing_result = await db.execute(
+                select(Interface).where(Interface.device_id == device.id)
+            )
+            existing_by_index = {iface.if_index: iface for iface in existing_result.scalars().all()}
+            now = datetime.now(timezone.utc)
+
+            for iface_data in snmp_interfaces:
+                existing = existing_by_index.get(iface_data["if_index"])
+
+                if existing:
+                    iface_row = existing
+                else:
+                    iface_row = Interface(device_id=device.id, if_index=iface_data["if_index"])
+                    db.add(iface_row)
+
+                # Bandwidth rate = (new counter - old counter) / elapsed seconds,
+                # converted from bytes to megabits. Requires a previous reading
+                # to compare against, so the very first poll for an interface
+                # just records a baseline with no rate yet.
+                in_octets = iface_data["in_octets"]
+                out_octets = iface_data["out_octets"]
+                if (
+                    in_octets is not None
+                    and out_octets is not None
+                    and iface_row.last_in_octets is not None
+                    and iface_row.last_out_octets is not None
+                    and iface_row.last_octets_at is not None
+                ):
+                    elapsed = (now - iface_row.last_octets_at).total_seconds()
+                    in_delta = in_octets - iface_row.last_in_octets
+                    out_delta = out_octets - iface_row.last_out_octets
+
+                    # 32-bit SNMP counters wrap around to 0 periodically —
+                    # a negative delta means that happened, so skip this
+                    # interval rather than reporting a bogus negative rate.
+                    if elapsed > 0 and in_delta >= 0 and out_delta >= 0:
+                        in_mbps = (in_delta * 8) / elapsed / 1_000_000
+                        out_mbps = (out_delta * 8) / elapsed / 1_000_000
+                        db.add(
+                            Metric(
+                                device_id=device.id,
+                                interface_id=iface_row.id if existing else None,
+                                metric_type="bandwidth_in_mbps",
+                                value=in_mbps,
+                            )
+                        )
+                        db.add(
+                            Metric(
+                                device_id=device.id,
+                                interface_id=iface_row.id if existing else None,
+                                metric_type="bandwidth_out_mbps",
+                                value=out_mbps,
+                            )
+                        )
+
+                iface_row.if_name = iface_data["if_name"]
+                iface_row.is_up = iface_data["is_up"]
+                iface_row.speed_mbps = iface_data["speed_mbps"]
+                if in_octets is not None and out_octets is not None:
+                    iface_row.last_in_octets = in_octets
+                    iface_row.last_out_octets = out_octets
+                    iface_row.last_octets_at = now
 
 
 async def poll_all_devices() -> None:
