@@ -1,7 +1,7 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_admin
@@ -51,8 +51,19 @@ async def recent_device_events(
 
 
 @router.get("", response_model=list[DeviceOut])
-async def list_devices(db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
-    result = await db.execute(select(Device).order_by(Device.created_at.desc()))
+async def list_devices(
+    response: Response,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    total = await db.scalar(select(func.count()).select_from(Device))
+    response.headers["X-Total-Count"] = str(total or 0)
+
+    result = await db.execute(
+        select(Device).order_by(Device.created_at.desc()).limit(limit).offset(offset)
+    )
     return result.scalars().all()
 
 

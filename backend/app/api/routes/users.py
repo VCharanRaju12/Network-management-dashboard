@@ -1,7 +1,7 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import require_admin
@@ -15,8 +15,19 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.get("", response_model=list[UserOut])
-async def list_users(db: AsyncSession = Depends(get_db), _: User = Depends(require_admin)):
-    result = await db.execute(select(User).order_by(User.created_at.desc()))
+async def list_users(
+    response: Response,
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    total = await db.scalar(select(func.count()).select_from(User))
+    response.headers["X-Total-Count"] = str(total or 0)
+
+    result = await db.execute(
+        select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
+    )
     return result.scalars().all()
 
 

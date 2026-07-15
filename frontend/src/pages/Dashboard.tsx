@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Router, Network, LayoutGrid, Share2, Plus, LogOut, RadioTower, Users as UsersIcon } from "lucide-react";
+import { Router, Network, LayoutGrid, Share2, Plus, LogOut, RadioTower, Users as UsersIcon, ScrollText } from "lucide-react";
 import { api, type Device } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useDashboardSocket } from "../hooks/useDashboardSocket";
@@ -108,10 +108,23 @@ export function Dashboard() {
                 Users
               </Link>
             )}
-            <span className="text-muted">
+            {isAdmin && (
+              <Link
+                to="/admin/audit-log"
+                className="flex items-center gap-1.5 text-muted hover:text-ink transition-colors"
+              >
+                <ScrollText size={14} />
+                Audit log
+              </Link>
+            )}
+            <Link
+              to="/account"
+              className="text-muted hover:text-ink transition-colors"
+              title="Account settings"
+            >
               {username} <span className="text-border">·</span>{" "}
               <span className="capitalize text-ink">{role}</span>
-            </span>
+            </Link>
             <button
               onClick={logout}
               className="flex items-center gap-1.5 text-muted hover:text-ink transition-colors"

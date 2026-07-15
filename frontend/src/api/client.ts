@@ -135,6 +135,16 @@ export interface DeviceEvent {
   created_at: string;
 }
 
+export interface AuditLogEntry {
+  id: number;
+  actor_id: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface AppUser {
   id: string;
   username: string;
@@ -168,6 +178,9 @@ export const api = {
 
   getRecentEvents: (limit = 30) => request<DeviceEvent[]>(`/devices/events/recent?limit=${limit}`),
 
+  getAuditLog: (offset = 0, limit = 25) =>
+    request<AuditLogEntry[]>(`/audit-log?offset=${offset}&limit=${limit}`),
+
   createDevice: (payload: {
     name: string;
     ip_address: string;
@@ -197,7 +210,7 @@ export const api = {
   deleteDevice: (id: string) => request<void>(`/devices/${id}`, { method: "DELETE" }),
 
   // User management (admin only — backend enforces this regardless of UI)
-  listUsers: () => request<AppUser[]>("/users"),
+  listUsers: (offset = 0, limit = 20) => request<AppUser[]>(`/users?offset=${offset}&limit=${limit}`),
 
   createUser: (payload: { username: string; email: string; password: string; role: string }) =>
     request<AppUser>("/users", { method: "POST", body: JSON.stringify(payload) }),
@@ -206,4 +219,10 @@ export const api = {
     request<AppUser>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
 
   deleteUser: (id: string) => request<void>(`/users/${id}`, { method: "DELETE" }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<void>("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
 };

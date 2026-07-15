@@ -3,17 +3,22 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, Trash2, UserPlus } from "lucide-react";
 import { api, ApiError, type AppUser } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { Pagination } from "../components/Pagination";
+
+const PAGE_SIZE = 20;
 
 export function Users() {
   const { username: currentUsername } = useAuth();
   const [users, setUsers] = useState<AppUser[]>([]);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
 
   async function load() {
+    setLoading(true);
     try {
-      const data = await api.listUsers();
+      const data = await api.listUsers(offset, PAGE_SIZE);
       setUsers(data);
     } catch {
       setError("Couldn't load users.");
@@ -24,7 +29,8 @@ export function Users() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offset]);
 
   async function toggleActive(user: AppUser) {
     try {
@@ -172,6 +178,16 @@ export function Users() {
               </tbody>
             </table>
           </div>
+        )}
+
+        {!loading && (
+          <Pagination
+            offset={offset}
+            limit={PAGE_SIZE}
+            count={users.length}
+            onPrev={() => setOffset((o) => Math.max(o - PAGE_SIZE, 0))}
+            onNext={() => setOffset((o) => o + PAGE_SIZE)}
+          />
         )}
       </main>
     </div>
